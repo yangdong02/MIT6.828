@@ -1,3 +1,6 @@
+/*
+ * Hint: a pipe can be used in one direction only!
+ */
 #include<kernel/types.h>
 #include<user/user.h>
 
