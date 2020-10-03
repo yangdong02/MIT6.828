@@ -113,9 +113,11 @@ found:
     return 0;
   }
 
-  // An empty user page table.
+  // An empty user page table & kernel page table.
   p->pagetable = proc_pagetable(p);
-  if(p->pagetable == 0){
+  p->kpgtbl = proc_kpgtbl(p);
+
+  if(p->pagetable == 0 || p->kpgtbl == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -141,6 +143,8 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kpgtbl)
+    proc_freekpgtbl(p->kpgtbl);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -184,6 +188,52 @@ proc_pagetable(struct proc *p)
 
   return pagetable;
 }
+// Create kernel page table for a given process
+extern char etext[];
+extern char trampoline[];
+pagetable_t
+proc_kpgtbl(struct proc *p) {
+  pagetable_t kpagetable;
+  kpagetable = (pagetable_t) kalloc();
+  memset(kpagetable, 0, PGSIZE);
+
+  // uart registers
+  if(mappages(kpagetable, UART0, PGSIZE, UART0, PTE_R | PTE_W) < 0)
+	  panic("proc_kpgtbl");
+
+  // virtio mmio disk interface
+  if(mappages(kpagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) < 0)
+	  panic("proc_kpgtbl");
+
+  // CLINT
+  if(mappages(kpagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W) < 0)
+	  panic("proc_kpgtbl");
+
+  // PLIC
+  if(mappages(kpagetable, PLIC, 0x400000, PLIC, PTE_R | PTE_W) < 0)
+	  panic("proc_kpgtbl");
+
+  // map kernel text executable and read-only.
+  if(mappages(kpagetable, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X) < 0)
+	  panic("proc_kpgtbl");
+
+  // map kernel data and the physical RAM we'll make use of.
+  if(mappages(kpagetable, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W) < 0)
+	  panic("proc_kpgtbl");
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  if(mappages(kpagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) < 0)
+	  panic("proc_kpgtbl");
+
+  // map kernel stack of current process. We MUST map all of the stacks!!!
+  for(struct proc *p = proc; p < &proc[NPROC]; ++p) {
+  	uint64 va = KSTACK((int)(p - proc)), pa = kvmpa(va);
+	if(mappages(kpagetable, va, PGSIZE, pa, PTE_R | PTE_W) < 0)
+		panic("proc_kpgtbl");
+  }
+  return kpagetable;
+}
 
 // Free a process's page table, and free the
 // physical memory it refers to.
@@ -193,6 +243,24 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
+}
+
+// As all of them are just memory maps, there is no need to free physical memory.
+void
+proc_freekpgtbl(pagetable_t pagetable) {
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      proc_freekpgtbl((pagetable_t)child);
+      pagetable[i] = 0;
+    } else if(pte & PTE_V){
+      continue;
+    }
+  }
+  kfree((void*)pagetable);
 }
 
 // a user program that calls exec("/init")
@@ -453,6 +521,7 @@ wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+extern pagetable_t kernel_pagetable;
 void
 scheduler(void)
 {
@@ -473,6 +542,8 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+		w_satp(MAKE_SATP(p->kpgtbl));
+		sfence_vma();
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
@@ -485,6 +556,8 @@ scheduler(void)
     }
 #if !defined (LAB_FS)
     if(found == 0) {
+	  w_satp(MAKE_SATP(kernel_pagetable));
+	  sfence_vma();
       intr_on();
       asm volatile("wfi");
     }
