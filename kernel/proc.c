@@ -114,8 +114,8 @@ found:
   }
 
   // An empty user page table & kernel page table.
-  p->pagetable = proc_pagetable(p);
   p->kpgtbl = proc_kpgtbl(p);
+  p->pagetable = proc_pagetable(p, p->kpgtbl);
 
   if(p->pagetable == 0 || p->kpgtbl == 0){
     freeproc(p);
@@ -159,7 +159,7 @@ freeproc(struct proc *p)
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
 pagetable_t
-proc_pagetable(struct proc *p)
+proc_pagetable(struct proc *p, pagetable_t ktable)
 {
   pagetable_t pagetable;
 
@@ -180,7 +180,9 @@ proc_pagetable(struct proc *p)
 
   // map the trapframe just below TRAMPOLINE, for trampoline.S.
   if(mappages(pagetable, TRAPFRAME, PGSIZE,
-              (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
+              (uint64)(p->trapframe), PTE_R | PTE_W) < 0 ||
+     mappages(ktable, TRAPFRAME, PGSIZE,
+		      (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
     uvmfree(pagetable, 0);
     return 0;
@@ -286,7 +288,8 @@ userinit(void)
   
   // allocate one user page and copy init's instructions
   // and data into it.
-  uvminit(p->pagetable, initcode, sizeof(initcode));
+  uvmkvminit(p->pagetable, p->kpgtbl, initcode, sizeof(initcode));
+
   p->sz = PGSIZE;
 
   // prepare for the very first "return" from kernel to user.
@@ -310,12 +313,14 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
+	printf("Growproc %d, sz=%x, PLIC=%x\n", n, sz, PLIC);
+  if(sz + n > PLIC) return -1;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+    if((sz = uvmkvmalloc(p->pagetable, p->kpgtbl, sz, sz + n)) == 0) {
       return -1;
     }
   } else if(n < 0){
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
+	sz = uvmkvmdealloc(p->pagetable, p->kpgtbl, sz, sz+n);
   }
   p->sz = sz;
   return 0;
@@ -336,7 +341,7 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(uvmkvmcopy(p->pagetable, np->pagetable, np->kpgtbl, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
