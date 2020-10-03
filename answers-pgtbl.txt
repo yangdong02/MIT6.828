@@ -1,0 +1,5 @@
+Q: What does it mean by "it's OK to map over CLINT"?
+A: Just do not map CLINT in function proc_kpgtbl() :)
+
+Q: What permissions do the PTEs for user addresses need in a process's kernel page table?
+A: We should never set PTE_U. Because when we do copyin, we need to access user data in kernel mode.

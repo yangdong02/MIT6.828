@@ -201,40 +201,41 @@ proc_kpgtbl(struct proc *p) {
 
   // uart registers
   if(mappages(kpagetable, UART0, PGSIZE, UART0, PTE_R | PTE_W) < 0)
-	  panic("proc_kpgtbl");
+	  goto err;
 
   // virtio mmio disk interface
   if(mappages(kpagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) < 0)
-	  panic("proc_kpgtbl");
-
-  // CLINT
-  if(mappages(kpagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W) < 0)
-	  panic("proc_kpgtbl");
+	  goto err;
 
   // PLIC
   if(mappages(kpagetable, PLIC, 0x400000, PLIC, PTE_R | PTE_W) < 0)
-	  panic("proc_kpgtbl");
+	  goto err;
 
   // map kernel text executable and read-only.
   if(mappages(kpagetable, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X) < 0)
-	  panic("proc_kpgtbl");
+	  goto err;
 
   // map kernel data and the physical RAM we'll make use of.
   if(mappages(kpagetable, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W) < 0)
-	  panic("proc_kpgtbl");
+	  goto err;
 
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
   if(mappages(kpagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) < 0)
-	  panic("proc_kpgtbl");
+	  goto err;
 
   // map kernel stack of current process. We MUST map all of the stacks!!!
   for(struct proc *p = proc; p < &proc[NPROC]; ++p) {
   	uint64 va = KSTACK((int)(p - proc)), pa = kvmpa(va);
 	if(mappages(kpagetable, va, PGSIZE, pa, PTE_R | PTE_W) < 0)
-		panic("proc_kpgtbl");
+	  goto err;
   }
   return kpagetable;
+
+err:
+  if(kpagetable)
+	  proc_freekpgtbl(kpagetable);
+  return 0;
 }
 
 // Free a process's page table, and free the
@@ -313,7 +314,7 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
-  if(sz + n > CLINT) return -1;
+  if(sz + n > PLIC) return -1;
   if(n > 0){
     if((sz = uvmkvmalloc(p->pagetable, p->kpgtbl, sz, sz + n)) == 0) {
       return -1;
@@ -492,8 +493,9 @@ wait(uint64 addr)
         if(np->state == ZOMBIE){
           // Found one.
           pid = np->pid;
-          if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
-                                  sizeof(np->xstate)) < 0) {
+          if(addr != 0 && (copyout(p->pagetable, addr, (char *)&np->xstate,
+                                  sizeof(np->xstate)) < 0 ||
+					       kvmcopyout(p->kpgtbl, addr, (char*)&np->xstate, sizeof(np->xstate)) < 0)) {
             release(&np->lock);
             release(&p->lock);
             return -1;
@@ -724,7 +726,8 @@ either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
   struct proc *p = myproc();
   if(user_dst){
-    return copyout(p->pagetable, dst, src, len);
+    if(copyout(p->pagetable, dst, src, len) == -1) return -1;
+	return kvmcopyout(p->kpgtbl, dst, src, len);
   } else {
     memmove((char *)dst, src, len);
     return 0;

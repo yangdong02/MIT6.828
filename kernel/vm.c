@@ -112,7 +112,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
 }
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
-// Can only be used to look up user pages.
+// Can only be used to look up kernel pages.
 uint64
 kvmwalkaddr(pagetable_t pagetable, uint64 va)
 {
@@ -313,6 +313,7 @@ uvmkvmalloc(pagetable_t pagetable, pagetable_t ktable, uint64 oldsz, uint64 news
       return 0;
     }
 	if(mappages(ktable, a, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R) != 0) {
+	  uvmunmap(pagetable, a, 1, 0);
       kfree(mem);
       uvmkvmdealloc(pagetable, ktable, a, oldsz);
 	  return 0;
@@ -448,17 +449,21 @@ uvmkvmcopy(pagetable_t old, pagetable_t new, pagetable_t ker, uint64 sz)
     if((mem = kalloc()) == 0)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0 ||
-	   mappages(ker, i, PGSIZE, (uint64)mem, flags&~PTE_U) != 0){
+    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0) {
       kfree(mem);
       goto err;
     }
+	if(mappages(ker, i, PGSIZE, (uint64)mem, flags&~PTE_U) != 0) {
+	  uvmunmap(new, i, 1, 0);
+      kfree(mem);
+      goto err;
+	}
   }
   return 0;
 
  err:
+  uvmunmap(ker, 0, i / PGSIZE, 0);
   uvmunmap(new, 0, i / PGSIZE, 1);
-  uvmunmap(ker, 0, i / PGSIZE, 1);
   return -1;
 }
 // mark a PTE invalid for user access.
@@ -536,40 +541,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
-
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+	return copyinstr_new(pagetable, dst, srcva, max);
 }
 
 void vmprint_dfs(pagetable_t pagetable, int depth) {
