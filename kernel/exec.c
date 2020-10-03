@@ -38,7 +38,7 @@ exec(char *path, char **argv)
 
   if((ktable = proc_kpgtbl(p)) == 0)
 	  goto bad;
-  if((pagetable = proc_pagetable(p, ktable)) == 0)
+  if((pagetable = proc_pagetable(p)) == 0)
     goto bad;
 
   // Load program into memory.

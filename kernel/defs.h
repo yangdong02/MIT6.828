@@ -90,7 +90,7 @@ int             cpuid(void);
 void            exit(int);
 int             fork(void);
 int             growproc(int);
-pagetable_t     proc_pagetable(struct proc *, pagetable_t);
+pagetable_t     proc_pagetable(struct proc *);
 pagetable_t     proc_kpgtbl(struct proc *); // Lab pagetable
 void            proc_freepagetable(pagetable_t, uint64);
 void            proc_freekpgtbl(pagetable_t);

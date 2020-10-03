@@ -115,7 +115,7 @@ found:
 
   // An empty user page table & kernel page table.
   p->kpgtbl = proc_kpgtbl(p);
-  p->pagetable = proc_pagetable(p, p->kpgtbl);
+  p->pagetable = proc_pagetable(p);
 
   if(p->pagetable == 0 || p->kpgtbl == 0){
     freeproc(p);
@@ -159,7 +159,7 @@ freeproc(struct proc *p)
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
 pagetable_t
-proc_pagetable(struct proc *p, pagetable_t ktable)
+proc_pagetable(struct proc *p)
 {
   pagetable_t pagetable;
 
@@ -180,8 +180,6 @@ proc_pagetable(struct proc *p, pagetable_t ktable)
 
   // map the trapframe just below TRAMPOLINE, for trampoline.S.
   if(mappages(pagetable, TRAPFRAME, PGSIZE,
-              (uint64)(p->trapframe), PTE_R | PTE_W) < 0 ||
-     mappages(ktable, TRAPFRAME, PGSIZE,
 		      (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
     uvmfree(pagetable, 0);
@@ -225,11 +223,14 @@ proc_kpgtbl(struct proc *p) {
 	  goto err;
 
   // map kernel stack of current process. We MUST map all of the stacks!!!
-  for(struct proc *p = proc; p < &proc[NPROC]; ++p) {
-  	uint64 va = KSTACK((int)(p - proc)), pa = kvmpa(va);
+  for(int i = 0; i < NPROC; ++i) {
+  	uint64 va = KSTACK(i), pa = kvmpa(va);
 	if(mappages(kpagetable, va, PGSIZE, pa, PTE_R | PTE_W) < 0)
 	  goto err;
   }
+  if(mappages(kpagetable, TRAPFRAME, PGSIZE,
+		      (uint64)(p->trapframe), PTE_R | PTE_W) < 0)
+	  goto err;
   return kpagetable;
 
 err:
