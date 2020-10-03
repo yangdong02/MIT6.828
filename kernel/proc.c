@@ -313,8 +313,7 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
-	printf("Growproc %d, sz=%x, PLIC=%x\n", n, sz, PLIC);
-  if(sz + n > PLIC) return -1;
+  if(sz + n > CLINT) return -1;
   if(n > 0){
     if((sz = uvmkvmalloc(p->pagetable, p->kpgtbl, sz, sz + n)) == 0) {
       return -1;
