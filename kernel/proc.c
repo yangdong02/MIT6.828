@@ -228,9 +228,6 @@ proc_kpgtbl(struct proc *p) {
 	if(mappages(kpagetable, va, PGSIZE, pa, PTE_R | PTE_W) < 0)
 	  goto err;
   }
-  if(mappages(kpagetable, TRAPFRAME, PGSIZE,
-		      (uint64)(p->trapframe), PTE_R | PTE_W) < 0)
-	  goto err;
   return kpagetable;
 
 err:
@@ -552,6 +549,9 @@ scheduler(void)
 		w_satp(MAKE_SATP(p->kpgtbl));
 		sfence_vma();
         swtch(&c->context, &p->context);
+		// Switch to kernel pagetable!!! Otherwise, if process's kpgtbl is freed, kernel will panic.
+	    w_satp(MAKE_SATP(kernel_pagetable));
+	    sfence_vma();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
@@ -563,8 +563,6 @@ scheduler(void)
     }
 #if !defined (LAB_FS)
     if(found == 0) {
-	  w_satp(MAKE_SATP(kernel_pagetable));
-	  sfence_vma();
       intr_on();
       asm volatile("wfi");
     }
