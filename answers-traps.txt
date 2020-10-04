@@ -1,0 +1,14 @@
+RISC-V assembly:
+
+Registers a0, a1, ... stores arguments to functions. e.g. 13 is stored in register a2 in main's call to printf.
+
+No direct call instruction for calling f in main. The compiler has already precalculated the result. There is also no direct call to g, as the compiler has inlined that function call.
+
+Printf is located at 0x630.
+
+Register ra will be 0x38.
+
+The output is: "HE110 World". I would need to set i to 0x726c6400 if RISC-V were big-endian. I would not need to change 57616.
+The answer depends on what register a2 is at that time. The reason is that there are no enough arguments passed to printf.
+
+===============================
