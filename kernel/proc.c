@@ -177,7 +177,7 @@ proc_pagetable(struct proc *p)
   // map the trapframe just below TRAMPOLINE, for trampoline.S.
   if(mappages(pagetable, TRAPFRAME, PGSIZE,
               (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
-    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0, p->sz);
     uvmfree(pagetable, 0);
     return 0;
   }
@@ -190,8 +190,8 @@ proc_pagetable(struct proc *p)
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
-  uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-  uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, TRAMPOLINE, 1, 0, sz);
+  uvmunmap(pagetable, TRAPFRAME, 1, 0, sz);
   uvmfree(pagetable, sz);
 }
 
@@ -421,7 +421,7 @@ wait(uint64 addr)
           // Found one.
           pid = np->pid;
           if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
-                                  sizeof(np->xstate)) < 0) {
+                                  sizeof(np->xstate), p->sz, p->trapframe->sp) < 0) {
             release(&np->lock);
             release(&p->lock);
             return -1;
@@ -644,7 +644,7 @@ either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
   struct proc *p = myproc();
   if(user_dst){
-    return copyout(p->pagetable, dst, src, len);
+    return copyout(p->pagetable, dst, src, len, p->sz, p->trapframe->sp);
   } else {
     memmove((char *)dst, src, len);
     return 0;
@@ -659,7 +659,7 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
 {
   struct proc *p = myproc();
   if(user_src){
-    return copyin(p->pagetable, dst, src, len);
+    return copyin(p->pagetable, dst, src, len, p->sz, p->trapframe->sp);
   } else {
     memmove(dst, (char*)src, len);
     return 0;

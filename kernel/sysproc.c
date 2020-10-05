@@ -41,20 +41,17 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
-  int n;
+  uint64 addr;
+  uint64 n;
 
-  if(argint(0, &n) < 0)
+  if(argaddr(0, &n) < 0)
     return -1;
   struct proc *p = myproc();
   addr = p->sz;
-  if(n < 0) {
+  if(addr+n < addr) {
     p->sz = uvmdealloc(p->pagetable, addr, addr+n);
+	if(p->sz != addr+n) panic("sbrk: uvmdealloc");
   } else {
-    for(int a = PGROUNDUP(addr); a < addr+n; a += PGSIZE)
-		if(walk2(p->pagetable, a) == 0) {
-			return p->sz = uvmdealloc(p->pagetable, a, addr);
-		}
   	p->sz += n;
   }
   return addr;

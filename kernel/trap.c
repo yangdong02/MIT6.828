@@ -33,6 +33,7 @@ trapinithart(void)
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
 //
+extern const char *const ALLOCMSG[];
 void
 usertrap(void)
 {
@@ -69,19 +70,13 @@ usertrap(void)
     // ok
   } else if(r_scause() == 13 || r_scause() == 15) {
     // load / store on a lazy page ?
-    uint64 va = r_stval(), pa;
-	if(va >= p->sz) goto badprint;
-	if((pa = (uint64)kalloc()) == 0) goto badprint;
-	if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, pa, PTE_R|PTE_W|PTE_U))
-		goto badka;
-	goto good;
-  badka:
-	kfree((void *)pa);
-  badprint:
-	printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-	printf("            sepc=%p stval=%p (Page fault occurs!)\n", r_sepc(), r_stval());
-	p->killed = 1;
-  good:;
+    uint64 va = r_stval();
+	int ret = allocaddr(p->pagetable, p->sz, va, p->trapframe->sp);
+	if(ret) {
+	  printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p (Page fault: %s)\n", r_sepc(), r_stval(), ALLOCMSG[ret]);
+      p->killed = 1;
+	}
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
