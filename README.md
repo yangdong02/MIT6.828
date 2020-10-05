@@ -13,3 +13,5 @@ Refer to corresponding branches for codes and commits.
 2020.10.4 Lab pgtbl (66/66), 14h
 
 2020.10.4 Lab traps (85/85), 2h
+
+2020.10.5 Lab lazy (90/90), 5h
