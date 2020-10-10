@@ -11,12 +11,14 @@
 
 void freerange(void *pa_start, void *pa_end);
 
+
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
-
 struct run {
   struct run *next;
 };
+#define MXPAGES ((PHYSTOP-KERNBASE)/PGSIZE)
+char refcount[MXPAGES];
 
 struct {
   struct spinlock lock;
@@ -27,6 +29,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  memset(refcount, 1, sizeof refcount);
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -48,8 +51,11 @@ kfree(void *pa)
 {
   struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP || refcount[REFIDX(pa)] <= 0)
     panic("kfree");
+
+  if(--refcount[REFIDX(pa)])
+	  return;
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -76,7 +82,12 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    if(refcount[REFIDX(r)])
+      panic("kalloc: new page already has refcount!");
+	++refcount[REFIDX(r)];
+  }
+  
   return (void*)r;
 }
