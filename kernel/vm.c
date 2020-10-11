@@ -323,13 +323,10 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
+    if(mappages(new, i, PGSIZE, (uint64)pa, MAKE_COW(flags)) != 0)
+      goto err;
 	++refcount[REFIDX(pa)];
 	*pte = MAKE_COW(*pte);
-    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
-      --refcount[REFIDX(pa)];
-      *pte = DELE_COW(*pte);
-      goto err;
-    }
   }
   return 0;
 
@@ -375,7 +372,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 		if(mem == 0) return -1;
 		else {
 		  memmove(mem, (void *)pa, PGSIZE);
-		  mappages(pagetable, va0, PGSIZE, (uint64)mem, PTE_V|PTE_U|PTE_R|PTE_W);
+		  int flg = PTE_FLAGS(*pte) & ~PTE_C;
+	      *pte = PA2PTE((uint64)mem) | flg | PTE_W;
 		  --refcount[REFIDX(pa)];
 		  pa0 = (uint64)mem;
 		}

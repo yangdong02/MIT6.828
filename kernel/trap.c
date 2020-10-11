@@ -71,12 +71,13 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if(r_scause() == 15) { // COW page fault
+  } else if(r_scause() == 15) { // user COW page fault
     const char *reason = 0;
     pte_t *pte = walk(p->pagetable, r_stval(), 0);
     if(pte == 0) reason = "page does not exist";
 	else {
-      if((*pte & PTE_V) == 0 || (*pte & PTE_C) == 0) reason = "not a COW page";
+      if((*pte & PTE_V) == 0) reason = "not a valid page";
+	  else if((*pte & PTE_C) == 0) reason = "not a COW page";
 	  else {
         uint64 pa = (uint64)PTE2PA(*pte);
         if(refcount[REFIDX(pa)] == 1) {
@@ -86,7 +87,8 @@ usertrap(void)
 		  if(mem == 0) reason = "no enough memory";
           else {
             memmove(mem, (void *)pa, PGSIZE);
-		    mappages(p->pagetable, r_stval(), PGSIZE, (uint64)mem, PTE_V|PTE_U|PTE_R|PTE_W);
+			int flg = PTE_FLAGS(*pte) & ~PTE_C;
+			*pte = PA2PTE((uint64)mem) | flg | PTE_W;
 		    --refcount[REFIDX(pa)];
 		  }
 		}
