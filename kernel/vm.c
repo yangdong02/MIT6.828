@@ -358,8 +358,9 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+	if(va0 >= MAXVA) return -1;
 	pte_t *pte = walk(pagetable, va0, 0);
-    if((*pte & PTE_U) == 0 || (*pte & PTE_V) == 0 || (uint64)PTE2PA(*pte) == 0)
+    if(pte == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0 || (uint64)PTE2PA(*pte) == 0)
       return -1;
     pa0 = (uint64)PTE2PA(*pte);
    	if(*pte & PTE_C) {
