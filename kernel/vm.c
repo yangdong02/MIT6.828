@@ -7,6 +7,7 @@
 #include "fs.h"
 
 #define MAKE_COW(x) (((x) & ~PTE_W) | PTE_C)
+#define DELE_COW(x) (((x) | PTE_W) & ~PTE_C)
 
 /*
  * the kernel's page table.
@@ -326,6 +327,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 	*pte = MAKE_COW(*pte);
     if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       --refcount[REFIDX(pa)];
+      *pte = DELE_COW(*pte);
       goto err;
     }
   }
@@ -359,9 +361,28 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
+	pte_t *pte = walk(pagetable, va0, 0);
+    if((*pte & PTE_U) == 0 || (*pte & PTE_V) == 0 || (uint64)PTE2PA(*pte) == 0)
       return -1;
+    pa0 = (uint64)PTE2PA(*pte);
+   	if(*pte & PTE_C) {
+	  uint64 pa = (uint64)PTE2PA(*pte);
+      if(refcount[REFIDX(pa)] == 1) {
+	  	*pte = DELE_COW(*pte);
+		pa0 = pa;
+	  } else {
+	  	char *mem = kalloc();
+		if(mem == 0) return -1;
+		else {
+		  memmove(mem, (void *)pa, PGSIZE);
+		  mappages(pagetable, va0, PGSIZE, (uint64)mem, PTE_V|PTE_U|PTE_R|PTE_W);
+		  --refcount[REFIDX(pa)];
+		  pa0 = (uint64)mem;
+		}
+	  }
+	  if(pa0 == 0)
+        panic("COW fails");
+	}
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;

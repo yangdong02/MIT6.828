@@ -86,7 +86,7 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
     if(refcount[REFIDX(r)])
       panic("kalloc: new page already has refcount!");
-	++refcount[REFIDX(r)];
+	refcount[REFIDX(r)] = 1;
   }
   
   return (void*)r;

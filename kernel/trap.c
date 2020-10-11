@@ -6,6 +6,9 @@
 #include "proc.h"
 #include "defs.h"
 
+#define MAKE_COW(x) (((x) & ~PTE_W) | PTE_C)
+#define DELE_COW(x) (((x) | PTE_W) & ~PTE_C)
+
 struct spinlock tickslock;
 uint ticks;
 
@@ -29,6 +32,7 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+extern pte_t *walk(pagetable_t, uint64, int);
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -67,8 +71,32 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if() {
-  
+  } else if(r_scause() == 15) { // COW page fault
+    const char *reason = 0;
+    pte_t *pte = walk(p->pagetable, r_stval(), 0);
+    if(pte == 0) reason = "page does not exist";
+	else {
+      if((*pte & PTE_V) == 0 || (*pte & PTE_C) == 0) reason = "not a COW page";
+	  else {
+        uint64 pa = (uint64)PTE2PA(*pte);
+        if(refcount[REFIDX(pa)] == 1) {
+		  *pte = DELE_COW(*pte);
+		} else {
+	      char *mem = kalloc();
+		  if(mem == 0) reason = "no enough memory";
+          else {
+            memmove(mem, (void *)pa, PGSIZE);
+		    mappages(p->pagetable, r_stval(), PGSIZE, (uint64)mem, PTE_V|PTE_U|PTE_R|PTE_W);
+		    --refcount[REFIDX(pa)];
+		  }
+		}
+	  }
+    }
+    if(reason != 0) {
+      printf("usertrap(): unhandled write page fault (%s). scause %p pid=%d\n", reason, r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+	}
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
