@@ -18,7 +18,6 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
-extern char refcount[];
 /*
  * create a direct-map page table for the kernel.
  */
@@ -325,7 +324,9 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     flags = PTE_FLAGS(*pte);
     if(mappages(new, i, PGSIZE, (uint64)pa, MAKE_COW(flags)) != 0)
       goto err;
-	++refcount[REFIDX(pa)];
+	acquire_reflock();
+	modify_ref(REFIDX(pa), 1);
+	release_reflock();
 	*pte = MAKE_COW(*pte);
   }
   return 0;
@@ -363,24 +364,28 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(pte == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0 || (uint64)PTE2PA(*pte) == 0)
       return -1;
     pa0 = (uint64)PTE2PA(*pte);
-   	if(*pte & PTE_C) {
-	  uint64 pa = (uint64)PTE2PA(*pte);
-      if(refcount[REFIDX(pa)] == 1) {
-	  	*pte = DELE_COW(*pte);
-		pa0 = pa;
-	  } else {
-	  	char *mem = kalloc();
-		if(mem == 0) return -1;
-		else {
-		  memmove(mem, (void *)pa, PGSIZE);
-		  int flg = PTE_FLAGS(*pte) & ~PTE_C;
-	      *pte = PA2PTE((uint64)mem) | flg | PTE_W;
-		  --refcount[REFIDX(pa)];
-		  pa0 = (uint64)mem;
-		}
-	  }
-	  if(pa0 == 0)
-        panic("COW fails");
+	if((*pte & PTE_W) == 0) {
+		if(*pte & PTE_C) {
+		  uint64 pa = (uint64)PTE2PA(*pte);
+		  acquire_reflock();
+		  if(read_ref(REFIDX(pa)) == 1) {
+			*pte = DELE_COW(*pte);
+			pa0 = pa;
+		  } else {
+			char *mem = kalloc_nolock();
+			if(mem == 0) { release_reflock(); return -1; }
+			else {
+			  memmove(mem, (void *)pa, PGSIZE);
+			  int flg = PTE_FLAGS(*pte) & ~PTE_C;
+			  *pte = PA2PTE((uint64)mem) | flg | PTE_W;
+			  modify_ref(REFIDX(pa), -1);
+			  pa0 = (uint64)mem;
+			}
+		  }
+		  if(pa0 == 0)
+			panic("COW fails");
+		  release_reflock();
+		} else return -1;
 	}
     n = PGSIZE - (dstva - va0);
     if(n > len)

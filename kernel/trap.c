@@ -78,20 +78,23 @@ usertrap(void)
 	else {
       if((*pte & PTE_V) == 0) reason = "not a valid page";
 	  else if((*pte & PTE_C) == 0) reason = "not a COW page";
+	  else if((*pte & PTE_U) == 0) reason = "not a user page";
 	  else {
         uint64 pa = (uint64)PTE2PA(*pte);
-        if(refcount[REFIDX(pa)] == 1) {
+		acquire_reflock();
+        if(read_ref(REFIDX(pa)) == 1) {
 		  *pte = DELE_COW(*pte);
 		} else {
-	      char *mem = kalloc();
-		  if(mem == 0) reason = "no enough memory";
+	      char *mem = kalloc_nolock();
+		  if(mem == 0) reason = "no enough memory";//, printf("NO enough memmory\n");
           else {
             memmove(mem, (void *)pa, PGSIZE);
-			int flg = PTE_FLAGS(*pte) & ~PTE_C;
-			*pte = PA2PTE((uint64)mem) | flg | PTE_W;
-		    --refcount[REFIDX(pa)];
+			int flg = DELE_COW(PTE_FLAGS(*pte));
+			*pte = PA2PTE((uint64)mem) | flg;
+		    modify_ref(REFIDX(pa), -1);
 		  }
 		}
+		release_reflock();
 	  }
     }
     if(reason != 0) {

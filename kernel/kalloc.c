@@ -18,18 +18,26 @@ struct run {
   struct run *next;
 };
 #define MXPAGES ((PHYSTOP-KERNBASE)/PGSIZE)
-char refcount[MXPAGES];
 
 struct {
   struct spinlock lock;
   struct run *freelist;
+  char refcount[MXPAGES];
 } kmem;
+void acquire_reflock() { acquire(&kmem.lock); }
+void release_reflock() { release(&kmem.lock); }
+char modify_ref(uint64 pa, int chg) {
+  return kmem.refcount[pa] += chg;
+}
+char read_ref(uint64 pa) {
+  return kmem.refcount[pa];
+}
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  memset(refcount, 1, sizeof refcount);
+  memset(kmem.refcount, 1, sizeof kmem.refcount);
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -51,18 +59,20 @@ kfree(void *pa)
 {
   struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP || refcount[REFIDX(pa)] <= 0)
+  acquire(&kmem.lock);
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP || kmem.refcount[REFIDX(pa)] <= 0)
     panic("kfree");
 
-  if(--refcount[REFIDX(pa)])
+  if(--kmem.refcount[REFIDX(pa)]) {
+	  release(&kmem.lock);
 	  return;
+  }
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
@@ -80,13 +90,31 @@ kalloc(void)
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;
-  release(&kmem.lock);
 
   if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
-    if(refcount[REFIDX(r)])
+    if(kmem.refcount[REFIDX(r)])
       panic("kalloc: new page already has refcount!");
-	refcount[REFIDX(r)] = 1;
+	kmem.refcount[REFIDX(r)] = 1;
+  }
+  release(&kmem.lock);
+  
+  return (void*)r;
+}
+void *
+kalloc_nolock(void)
+{
+  struct run *r;
+
+  r = kmem.freelist;
+  if(r)
+    kmem.freelist = r->next;
+
+  if(r) {
+    memset((char*)r, 5, PGSIZE); // fill with junk
+    if(kmem.refcount[REFIDX(r)])
+      panic("kalloc: new page already has refcount!");
+	kmem.refcount[REFIDX(r)] = 1;
   }
   
   return (void*)r;

@@ -188,4 +188,8 @@ void            virtio_disk_intr(void);
 
 // refcount table
 #define REFIDX(x) ((((uint64)(x)) - KERNBASE) / PGSIZE)
-extern char refcount[];
+char read_ref(uint64);
+void acquire_reflock(void);
+void release_reflock(void);
+char modify_ref(uint64, int);
+void *kalloc_nolock(void);
