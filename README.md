@@ -17,3 +17,5 @@ Refer to corresponding branches for codes and commits.
 2020.10.5 Lab lazy (90/90), 5h
 
 2020.10.13 Lab cow (110/110), 10h
+
+2020.10.15 Lab multithreading (60/60), 5h
