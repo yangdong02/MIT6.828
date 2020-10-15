@@ -1,0 +1,9 @@
+The following sequence can lead to race conditions:
+
+put(1, 0)
+put(6, 0)
+
+Explanation:
+
+Suppose put(1, 0) calls insert(1, 0, &table[1], table[1]) and is going to execute the first instruction in function insert. Just at that moment, another process calls insert too. The second process does not know that &table[1] will be changed after the first process's execution, so it passes the original &table[1] and finally one of the updates will be lost.
+
