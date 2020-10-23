@@ -23,7 +23,7 @@
 #include "fs.h"
 #include "buf.h"
 
-#define HASHSIZE 1
+#define HASHSIZE 13
 
 struct {
   struct spinlock headlock[HASHSIZE], evictlock;
@@ -112,16 +112,19 @@ _bget(uint dev, uint blockno)
 		acquiresleep(&b->lock);
 		return b;
 	} else {
-		if(__sync_lock_test_and_set(&bcache.evictlock.locked, 1) != 0) {
+		push_off();
+		while(__sync_lock_test_and_set(&bcache.evictlock.locked, 1) != 0) {
 			__sync_synchronize();
 			release(&bcache.headlock[id]);
+			pop_off();
 			return 0;
 		}
 		__sync_synchronize();
+		bcache.evictlock.cpu = mycpu();
 		for(int i = 0; i < HASHSIZE; ++i) if(i != id) {
 			acquire(&bcache.headlock[i]);
 			b = bcache.freelist[i].prev;
-			if(b->prev != &bcache.freelist[id] && b->refcnt) {
+			if(b->prev != &bcache.freelist[i] && b->refcnt == 0) {
 				del(b), ins(b, &bcache.heads[id]);
 				b->dev = dev;
 				b->blockno = blockno;
@@ -130,14 +133,12 @@ _bget(uint dev, uint blockno)
 				b->timestamp = ticks;
 				release(&bcache.evictlock);
 				release(&bcache.headlock[id]);
-				for(int j = 0; j <= i; ++j)
-					release(&bcache.headlock[i]);
+				for(int j = 0; j <= i; ++j) if(j != id)
+					release(&bcache.headlock[j]);
 				acquiresleep(&b->lock);
 				return b;
 			}
 		}
-		for(int i = 0; i < HASHSIZE; ++i) if(i != id)
-			release(&bcache.headlock[i]);
 		panic("No more free block!");
 	}
 	panic("Control reaches end of _bget");
