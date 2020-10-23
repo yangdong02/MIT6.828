@@ -23,10 +23,10 @@
 #include "fs.h"
 #include "buf.h"
 
-#define HASHSIZE 13
+#define HASHSIZE 1
 
 struct {
-  struct spinlock headlock[HASHSIZE];
+  struct spinlock headlock[HASHSIZE], evictlock;
   struct buf buf[NBUF];
 
   // Linked list of all buffers, through prev/next.
@@ -43,6 +43,7 @@ binit(void)
 {
   struct buf *b;
 
+	initlock(&bcache.evictlock, "bcache.evictlock");
 
   // Create linked list of buffers
   for(int i = 0; i < HASHSIZE; ++i) {
@@ -55,6 +56,7 @@ binit(void)
   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
     initsleeplock(&b->lock, "buffer");
 		ins(b, &bcache.freelist[st]);
+		b->refcnt = 0;
 		b->timestamp = ticks;
 		if(++st == HASHSIZE) st = 0;
   }
@@ -67,7 +69,7 @@ int hash(uint dev, uint blockno) { return (1234 * dev + 5678 * blockno + 90) % H
 // If not found, allocate a buffer.
 // In either case, return locked buffer.
 static struct buf*
-bget(uint dev, uint blockno)
+_bget(uint dev, uint blockno)
 {
   struct buf *b;
 
@@ -98,31 +100,54 @@ bget(uint dev, uint blockno)
 
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
-	release(&bcache.headlock[id]);
-	int choice = -1, tms = 0x3f3f3f3f;
-	struct buf *ptr = 0;
-	for(int i = 0; i < HASHSIZE; ++i) {
-		acquire(&bcache.headlock[i]);
-		b = bcache.freelist[i].prev;
-		if(b->refcnt) panic("bget: freelist is not free!");
-		if(b != &bcache.freelist[i] && b->timestamp<tms)
-			ptr = b, choice = i, tms = b->timestamp;
+	b = bcache.freelist[id].prev;
+	if(b->prev != &bcache.freelist[id] && b->refcnt == 0) {
+		del(b), ins(b, &bcache.heads[id]);
+		b->dev = dev;
+		b->blockno = blockno;
+		b->valid = 0;
+		b->refcnt = 1;
+		b->timestamp = ticks;
+		release(&bcache.headlock[id]);
+		acquiresleep(&b->lock);
+		return b;
+	} else {
+		if(__sync_lock_test_and_set(&bcache.evictlock.locked, 1) != 0) {
+			__sync_synchronize();
+			release(&bcache.headlock[id]);
+			return 0;
+		}
+		__sync_synchronize();
+		for(int i = 0; i < HASHSIZE; ++i) if(i != id) {
+			acquire(&bcache.headlock[i]);
+			b = bcache.freelist[i].prev;
+			if(b->prev != &bcache.freelist[id] && b->refcnt) {
+				del(b), ins(b, &bcache.heads[id]);
+				b->dev = dev;
+				b->blockno = blockno;
+				b->valid = 0;
+				b->refcnt = 1;
+				b->timestamp = ticks;
+				release(&bcache.evictlock);
+				release(&bcache.headlock[id]);
+				for(int j = 0; j <= i; ++j)
+					release(&bcache.headlock[i]);
+				acquiresleep(&b->lock);
+				return b;
+			}
+		}
+		for(int i = 0; i < HASHSIZE; ++i) if(i != id)
+			release(&bcache.headlock[i]);
+		panic("No more free block!");
 	}
-	if(choice == -1)
-			panic("bget: no buffers");
-	b = ptr;
-	del(b), ins(b, &bcache.heads[id]);
-	b->dev = dev;
-	b->blockno = blockno;
-	b->valid = 0;
-	b->refcnt = 1;
-	b->timestamp = ticks;
-	for(int i = 0; i < HASHSIZE; ++i)
-		release(&bcache.headlock[i]);
- 	acquiresleep(&b->lock);
-	return b;
+	panic("Control reaches end of _bget");
 }
 
+static struct buf *bget(int dev, int blockno) {
+	struct buf *ret;
+	while((ret = _bget(dev, blockno)) == 0);
+	return ret;
+}
 // Return a locked buf with the contents of the indicated block.
 struct buf*
 bread(uint dev, uint blockno)
@@ -168,6 +193,8 @@ brelse(struct buf *b)
 }
 void
 bpin(struct buf *b) {
+  if(!holdingsleep(&b->lock))
+    panic("brelse");
   int id = hash(b->dev, b->blockno);
   acquire(&bcache.headlock[id]);
   b->refcnt++;
@@ -176,6 +203,8 @@ bpin(struct buf *b) {
 
 void
 bunpin(struct buf *b) {
+  if(!holdingsleep(&b->lock))
+    panic("brelse");
   int id = hash(b->dev, b->blockno);
   acquire(&bcache.headlock[id]);
   b->refcnt--;
