@@ -101,7 +101,7 @@ _bget(uint dev, uint blockno)
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
   b = bcache.freelist[id].prev;
-  if(b->prev != &bcache.freelist[id] && b->refcnt == 0) {
+  if(b != &bcache.freelist[id] && b->refcnt == 0) {
     del(b), ins(b, &bcache.heads[id]);
     b->dev = dev;
     b->blockno = blockno;
