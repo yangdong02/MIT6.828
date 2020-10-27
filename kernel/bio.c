@@ -23,7 +23,7 @@
 #include "fs.h"
 #include "buf.h"
 
-#define HASHSIZE 13
+#define HASHSIZE 29
 
 struct {
   struct spinlock headlock[HASHSIZE], evictlock;
@@ -43,22 +43,22 @@ binit(void)
 {
   struct buf *b;
 
-	initlock(&bcache.evictlock, "bcache.evictlock");
+  initlock(&bcache.evictlock, "bcache.evictlock");
 
   // Create linked list of buffers
   for(int i = 0; i < HASHSIZE; ++i) {
-  	initlock(&bcache.headlock[i], "bcache.headlock");
-		bcache.heads[i].prev = &bcache.heads[i];
-		bcache.heads[i].next = &bcache.heads[i];
-		bcache.freelist[i].next = bcache.freelist[i].prev = &bcache.freelist[i];
-	}
-	int st = 0;
+    initlock(&bcache.headlock[i], "bcache.headlock");
+    bcache.heads[i].prev = &bcache.heads[i];
+    bcache.heads[i].next = &bcache.heads[i];
+    bcache.freelist[i].next = bcache.freelist[i].prev = &bcache.freelist[i];
+  }
+  int st = 0;
   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
     initsleeplock(&b->lock, "buffer");
-		ins(b, &bcache.freelist[st]);
-		b->refcnt = 0;
-		b->timestamp = ticks;
-		if(++st == HASHSIZE) st = 0;
+    ins(b, &bcache.freelist[st]);
+    b->refcnt = 0;
+    b->timestamp = ticks;
+    if(++st == HASHSIZE) st = 0;
   }
 }
 
@@ -73,81 +73,84 @@ _bget(uint dev, uint blockno)
 {
   struct buf *b;
 
-	uint id = hash(dev, blockno);
+  uint id = hash(dev, blockno);
   acquire(&bcache.headlock[id]);
 
   // Is the block already cached?
   for(b = bcache.heads[id].next; b != &bcache.heads[id]; b = b->next){
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
-			b->timestamp = ticks;
+      b->timestamp = ticks;
       release(&bcache.headlock[id]);
       acquiresleep(&b->lock);
       return b;
     }
   }
-	// Is the block cached in freelist?
+  // Is the block cached in freelist?
   for(b = bcache.freelist[id].next; b != &bcache.freelist[id]; b = b->next){
-		if(b->dev == dev && b->blockno == blockno){
-			del(b), ins(b, &bcache.heads[id]);
+    if(b->dev == dev && b->blockno == blockno){
+      del(b), ins(b, &bcache.heads[id]);
       b->refcnt++;
-			b->timestamp = ticks;
+      b->timestamp = ticks;
       release(&bcache.headlock[id]);
       acquiresleep(&b->lock);
       return b;
-		}
-	}
+    }
+  }
 
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
-	b = bcache.freelist[id].prev;
-	if(b->prev != &bcache.freelist[id] && b->refcnt == 0) {
-		del(b), ins(b, &bcache.heads[id]);
-		b->dev = dev;
-		b->blockno = blockno;
-		b->valid = 0;
-		b->refcnt = 1;
-		b->timestamp = ticks;
-		release(&bcache.headlock[id]);
-		acquiresleep(&b->lock);
-		return b;
-	} else {
-		push_off();
-		while(__sync_lock_test_and_set(&bcache.evictlock.locked, 1) != 0) {
-			__sync_synchronize();
-			release(&bcache.headlock[id]);
-			pop_off();
-			return 0;
-		}
-		__sync_synchronize();
-		bcache.evictlock.cpu = mycpu();
-		for(int i = 0; i < HASHSIZE; ++i) if(i != id) {
-			acquire(&bcache.headlock[i]);
-			b = bcache.freelist[i].prev;
-			if(b->prev != &bcache.freelist[i] && b->refcnt == 0) {
-				del(b), ins(b, &bcache.heads[id]);
-				b->dev = dev;
-				b->blockno = blockno;
-				b->valid = 0;
-				b->refcnt = 1;
-				b->timestamp = ticks;
-				release(&bcache.evictlock);
-				release(&bcache.headlock[id]);
-				for(int j = 0; j <= i; ++j) if(j != id)
-					release(&bcache.headlock[j]);
-				acquiresleep(&b->lock);
-				return b;
-			}
-		}
-		panic("No more free block!");
-	}
-	panic("Control reaches end of _bget");
+  b = bcache.freelist[id].prev;
+  if(b->prev != &bcache.freelist[id] && b->refcnt == 0) {
+    del(b), ins(b, &bcache.heads[id]);
+    b->dev = dev;
+    b->blockno = blockno;
+    b->valid = 0;
+    b->refcnt = 1;
+    b->timestamp = ticks;
+    release(&bcache.headlock[id]);
+    acquiresleep(&b->lock);
+    return b;
+  } else {
+    push_off();
+#ifdef LAB_LOCK
+    __sync_fetch_and_add(&(bcache.evictlock.n), 1);
+#endif
+    while(__sync_lock_test_and_set(&bcache.evictlock.locked, 1) != 0) {
+      __sync_synchronize();
+      release(&bcache.headlock[id]);
+      pop_off();
+      return 0;
+    }
+    __sync_synchronize();
+    bcache.evictlock.cpu = mycpu();
+    for(int i = 0; i < HASHSIZE; ++i) if(i != id) {
+      acquire(&bcache.headlock[i]);
+      b = bcache.freelist[i].prev;
+      if(b != &bcache.freelist[i] && b->refcnt == 0) {
+        del(b), ins(b, &bcache.heads[id]);
+        b->dev = dev;
+        b->blockno = blockno;
+        b->valid = 0;
+        b->refcnt = 1;
+        b->timestamp = ticks;
+        release(&bcache.evictlock);
+        release(&bcache.headlock[id]);
+        for(int j = 0; j <= i; ++j) if(j != id)
+          release(&bcache.headlock[j]);
+        acquiresleep(&b->lock);
+        return b;
+      }
+    }
+    panic("No more free block!");
+  }
+  panic("Control reaches end of _bget");
 }
 
 static struct buf *bget(int dev, int blockno) {
-	struct buf *ret;
-	while((ret = _bget(dev, blockno)) == 0);
-	return ret;
+  struct buf *ret;
+  while((ret = _bget(dev, blockno)) == 0);
+  return ret;
 }
 // Return a locked buf with the contents of the indicated block.
 struct buf*
@@ -182,12 +185,12 @@ brelse(struct buf *b)
 
   releasesleep(&b->lock);
 
-	int id = hash(b->dev, b->blockno);
+  int id = hash(b->dev, b->blockno);
   acquire(&bcache.headlock[id]);
   b->refcnt--;
   if (b->refcnt == 0) {
     // no one is waiting for it.
-		del(b), ins(b, &bcache.freelist[id]);
+    del(b), ins(b, &bcache.freelist[id]);
   }
   
   release(&bcache.headlock[id]);
